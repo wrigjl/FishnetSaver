@@ -21,6 +21,7 @@
 
 void LogEvent(UINT message, WPARAM wParam, LPARAM lParam);
 LPWSTR makeCommandLine(HKEY subkey);
+LPWSTR makeCommand(HKEY subkey);
 void SetControlFromReg(HWND hCtrl, HKEY subkey, LPCWSTR regKey);
 void SetRegFromControl(HWND hCtrl, HKEY subkey, LPCWSTR regKey);
 
@@ -107,7 +108,7 @@ LRESULT WINAPI ScreenSaverProc(HWND hWnd,
     case WM_PROCESS_EXITED:
     {
         struct child_handles* ch = reinterpret_cast<struct child_handles*>(lParam);
-
+        OutputDebugStringW(L"ProcessExited");
         CloseHandle(ch->hProcess);
         CloseHandle(ch->hThread);
         (void) UnregisterWait(ch->waitHandle);
@@ -125,12 +126,6 @@ LRESULT WINAPI ScreenSaverProc(HWND hWnd,
 
     return 0;
 }
-
-#define MINVEL  1                 // minimum redraw speed value     
-#define MAXVEL  10                // maximum redraw speed value    
-#define DEFVEL  5                 // default redraw speed value    
-
-LONG    lSpeed = DEFVEL;          // redraw speed variable
 
 BOOL WINAPI ScreenSaverConfigureDialog(HWND hDlg,
     UINT message, WPARAM wParam, LPARAM lParam)
@@ -198,28 +193,39 @@ BOOL WINAPI RegisterDialogClasses(HANDLE hInst)
 
 struct child_handles *
 StartIt(HKEY subkey) {
+    LPWSTR command = NULL;
     LPWSTR commandline = NULL;
     struct child_handles* ch = NULL;
     STARTUPINFO si;
     PROCESS_INFORMATION pi;
 
+    OutputDebugStringW(L"Starting Process\n");
+
     ch = (struct child_handles *)LocalAlloc(LPTR, sizeof(*ch));
     if (ch == NULL)
         return (NULL);
 
-        LocalAlloc(LPTR, sizeof(*ch));
     ZeroMemory(&si, sizeof(si));
     si.cb = sizeof(si);
+    si.dwFlags |= STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_FORCEMINIMIZE | SW_MINIMIZE;
+
     ZeroMemory(&pi, sizeof(pi));
 
-    commandline = makeCommandLine(subkey);
+    command = makeCommand(subkey);
+    if (command == NULL)
+        goto errout;
 
-    if (!CreateProcess(L"fishnet-x86_64-pc-windows-msvc.exe",
+    commandline = makeCommandLine(subkey);
+    if (command == NULL)
+        goto errout;
+
+    if (!CreateProcess(command,
         commandline,
         NULL,       // process handler not inheritable
         NULL,       // thread handle not inheritable
         FALSE,      // Set handle inheritance to FALSE
-        0,          // no creation flags
+        0,
         NULL,       // use parent environment block
         NULL,       // use parent starting directory
         &si,        // STARTUPINFO
@@ -228,6 +234,9 @@ StartIt(HKEY subkey) {
         goto errout;
     }
 
+    OutputDebugStringW(L"Process created\n");
+
+    LocalFree(command);
     LocalFree(commandline);
     commandline = NULL;
 
@@ -242,6 +251,7 @@ StartIt(HKEY subkey) {
 errout:
     LocalFree(ch);
     LocalFree(commandline);
+    LocalFree(command);
     return (NULL);
 }
 
@@ -259,10 +269,37 @@ ProcessReaper(
 
 void
 StopIt(struct child_handles* ch) {
-    AttachConsole(ch->dwProcessId);
-    SetConsoleCtrlHandler(NULL, true);
-    GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0);
-    FreeConsole();
+    OutputDebugStringW(L"Stopping Process\n");
+    if (!FreeConsole())
+        OutputDebugString(L"Freeing my own console failed\n");
+    else
+        OutputDebugString(L"Freed my own console\n");
+
+    if (!AttachConsole(ch->dwProcessId)) {
+        DWORD e = GetLastError();
+        switch (e) {
+        case ERROR_ACCESS_DENIED:
+            OutputDebugStringW(L"AttachConsole: failed: access denied\n");
+            break;
+        case ERROR_INVALID_HANDLE:
+            OutputDebugStringW(L"AttachConsole: failed: invalid handle\n");
+            break;
+        case ERROR_INVALID_PARAMETER:
+            OutputDebugStringW(L"AttachConsole: failed: invalid param\n");
+            break;
+        default:
+            OutputDebugStringW(L"AttachConsole: failed: other\n");
+            break;
+        }
+    }
+
+    if (!SetConsoleCtrlHandler(NULL, true))
+        OutputDebugString(L"SetConsoleCtrlHandler: failed\n");
+    if (!GenerateConsoleCtrlEvent(CTRL_C_EVENT, ch->dwProcessId))
+        OutputDebugString(L"GenerateConsoleCtrlEvent: failed\n");
+    if (!FreeConsole())
+        OutputDebugString(L"FreeConsole: failed");
+    OutputDebugStringW(L"Stopped Process?\n");
 }
 
 void
@@ -289,6 +326,34 @@ LogEvent(UINT message, WPARAM wParam, LPARAM lParam)
     pInsertStrings[1] = s;
     ReportEvent(hEventLog, EVENTLOG_INFORMATION_TYPE, GENERAL_CATEGORY, MSG_FUNCTION_ERROR, NULL, 2, 0, pInsertStrings, NULL);
     LocalFree(s);
+}
+
+LPWSTR
+makeCommand(HKEY subkey)
+{
+    DWORD keylen;
+    LPWSTR val = NULL;
+    std::wstringstream ss;
+
+    keylen = 0;
+    if (RegGetValueW(subkey, NULL, L"Program", RRF_RT_REG_SZ, NULL, NULL, &keylen) != ERROR_SUCCESS) {
+        // XXX error handling
+        return NULL;
+    }
+
+    val = (LPWSTR)LocalAlloc(LMEM_FIXED, keylen);
+    if (val == NULL) {
+        // XXX error handling
+        return NULL;
+    }
+
+    if (RegGetValue(subkey, NULL, L"Program", RRF_RT_REG_SZ, NULL, val, &keylen) != ERROR_SUCCESS) {
+        LocalFree(val);
+        // XXX error handling
+        return NULL;
+    }
+
+    return val;
 }
 
 LPWSTR
@@ -351,6 +416,7 @@ SetControlFromReg(HWND hCtrl, HKEY subkey, LPCWSTR regKey)
 {
     DWORD keylen;
 
+    keylen = 0;
     if (RegGetValueW(subkey, NULL, regKey, RRF_RT_REG_SZ, NULL, NULL, &keylen) != ERROR_SUCCESS) {
         // XXX error handling
         return;
