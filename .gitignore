@@ -338,3 +338,10 @@ ASALocalRun/
 
 # BeatPulse healthcheck temp database
 healthchecksdb
+
+# droppings from the event handler
+messages.dll
+messages.h
+messages.rc
+messages.res
+MSG00409.bin
