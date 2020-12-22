@@ -13,7 +13,7 @@
 #include <sstream>
 
 #define PROVIDER_NAME L"FishnetProvider"
-#define REGISTRY_LOCATION L"Software\\Thought.net\\FishnetSaver"
+#define REGISTRY_LOCATION L"Software\\FishnetSaver"
 
 // TODO
 // - get/store key from registry (configure dialog, etc)
@@ -53,9 +53,6 @@ LRESULT WINAPI ScreenSaverProc(HWND hWnd,
     static bool quitOnExit = false;
     static HKEY hSubkey = (HKEY)INVALID_HANDLE_VALUE;
 
-    if (hEventLog == NULL)
-        hEventLog = RegisterEventSource(NULL, PROVIDER_NAME);
-
 #if 0
     LogEvent(message, wParam, lParam);
 #endif
@@ -64,6 +61,9 @@ LRESULT WINAPI ScreenSaverProc(HWND hWnd,
     {
     case WM_CREATE:
     {
+        if (hEventLog == NULL)
+            RegisterEventSource(NULL, PROVIDER_NAME);
+
         LRESULT lp = RegCreateKeyEx(HKEY_LOCAL_MACHINE, REGISTRY_LOCATION, 0, NULL, REG_OPTION_NON_VOLATILE,
             KEY_READ | KEY_QUERY_VALUE,
             NULL, &hSubkey, NULL);
@@ -94,17 +94,76 @@ LRESULT WINAPI ScreenSaverProc(HWND hWnd,
         break;
 
     case WM_TIMER:
+    {
         if (quitOnExit)
             break;
 
         if (runningProc == NULL)
             runningProc = StartIt(hSubkey);
 
-        break;
+        HDC hDC;
+        RECT rc = { 0 };
+        PAINTSTRUCT ps = { 0 };
 
+        hDC = BeginPaint(hWnd, &ps);
+
+        GetClientRect(hWnd, &rc);
+        FillRect(hDC, &rc, (HBRUSH)GetStockObject(BLACK_BRUSH));
+
+        SetBkColor(hDC, RGB(0, 0, 0));
+
+        if (runningProc == NULL)
+            SetTextColor(hDC, RGB(255, 0, 0));
+        else
+            SetTextColor(hDC, RGB(120, 120, 120));
+
+        if (fChildPreview)
+            TextOut(hDC, 2, 45, L"FishnetSaver", (int)wcslen(L"FishnetSaver"));
+        else
+            TextOut(hDC, GetSystemMetrics(SM_CXSCREEN) / 2,
+                GetSystemMetrics(SM_CYSCREEN) / 2, L"FishnetSaver", (int)wcslen(L"FishnetSaver"));
+
+        EndPaint(hWnd, &ps);
+        break;
+    }
+
+    case WM_ERASEBKGND:
+    {
+        // I see a colorful screen and I want to paint it black
+        HDC hDC = GetDC(hWnd);
+        RECT rc = { 0 };
+        GetClientRect(hWnd, &rc);
+        FillRect(hDC, &rc, (HBRUSH)GetStockObject(BLACK_BRUSH));
+        ReleaseDC(hWnd, hDC);
+        break;
+    }
     case WM_PAINT:
-        break;
+    {
+        HDC hDC;
+        RECT rc = { 0 };
+        PAINTSTRUCT ps = { 0 };
 
+        hDC = BeginPaint(hWnd, &ps);
+
+        GetClientRect(hWnd, &rc);
+        FillRect(hDC, &rc, (HBRUSH)GetStockObject(BLACK_BRUSH));
+
+        SetBkColor(hDC, RGB(0, 0, 0));
+
+        if (runningProc == NULL)
+            SetTextColor(hDC, RGB(255, 0, 0));
+        else
+            SetTextColor(hDC, RGB(120, 120, 120));
+
+        if (fChildPreview)
+            TextOut(hDC, 2, 45, L"FishnetSaver", (int)wcslen(L"FishnetSaver"));
+        else
+            TextOut(hDC, GetSystemMetrics(SM_CXSCREEN) / 2,
+                GetSystemMetrics(SM_CYSCREEN) / 2, L"FishnetSaver", (int)wcslen(L"FishnetSaver"));
+
+        EndPaint(hWnd, &ps);
+        break;
+    }
     case WM_PROCESS_EXITED:
     {
         struct child_handles* ch = reinterpret_cast<struct child_handles*>(lParam);
