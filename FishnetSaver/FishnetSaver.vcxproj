@@ -52,6 +52,9 @@
     <WholeProgramOptimization>true</WholeProgramOptimization>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
+  <PropertyGroup>
+    <CustomBuildBeforeTargets>ClCompile</CustomBuildBeforeTargets>
+  </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
   </ImportGroup>
@@ -154,27 +157,27 @@
       <Outputs>FishnetSaver.scr</Outputs>
     </CustomBuildStep>
   </ItemDefinitionGroup>
+  <ItemDefinitionGroup>
+    <CustomBuildStep>
+      <Command>mc -U messages.mc
+rc /nologo /r messages.rc
+link /nologo /noentry /dll /machine:$(Platform) messages.res /out:messages.dll</Command>
+      <Outputs>messages.res;messages.h;messages.rc;MSG00409.bin;messages.dll</Outputs>
+      <Inputs>messages.mc</Inputs>
+      <Message>Building event handler</Message>
+    </CustomBuildStep>
+  </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="FishnetSaver.cpp" />
-  </ItemGroup>
-  <ItemGroup>
-    <CustomBuild Include="messages.mc">
-      <FileType>Document</FileType>
-      <Command Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">mc %(FileName).mc
-rc /r /nologo messages.rc
-link /machine:x64 /dll /noentry /nologo messages.res /out:messages.dll</Command>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">messages.h; messages.rc; MSG00409.bin; messages.res; messages.dll</Outputs>
-      <Command Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">mc %(FileName).mc
-rc /r /nologo messages.rc
-link /machine:x64 /dll /noentry /nologo messages.res /out:messages.dll</Command>
-      <Outputs Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">messages.h; messages.rc; MSG00409.bin; messages.res; messages.dll</Outputs>
-    </CustomBuild>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="resource.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="Resource.rc" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="messages.mc" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
