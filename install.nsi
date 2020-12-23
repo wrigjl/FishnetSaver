@@ -75,6 +75,16 @@ section
 	WriteRegStr HKLM $FishnetKey "Key" $thekey
 	WriteRegStr HKLM $FishnetKey "Program" "$INSTDIR\fishnet-x86_64-pc-windows-msvc.exe"
 
+	# Set the logon screensaver
+	WriteRegStr HKU ".DEFAULT\Control Panel\Desktop" "SCRNSAVE.EXE" "$SYSDIR\FishnetSaver.scr"
+	WriteRegStr HKU ".DEFAULT\Control Panel\Desktop" "ScreenSaveTimeOut" "900"
+	WriteRegStr HKU ".DEFAULT\Control Panel\Desktop" "ScreenSaveActive" "1"
+
+	# Set the current user screensaver
+	WriteRegStr HKCU "Control Panel\Desktop" "SCRNSAVE.EXE" "$SYSDIR\FishnetSaver.scr"
+	WriteRegStr HKCU "Control Panel\Desktop" "ScreenSaveTimeOut" "900"
+	WriteRegStr HKCU "Control Panel\Desktop" "ScreenSaveActive" "1"
+
 	writeUninstaller $INSTDIR\uninstaller.exe
 sectionend
 
