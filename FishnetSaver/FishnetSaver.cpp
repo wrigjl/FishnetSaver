@@ -20,6 +20,8 @@
 // - get/store path to fishnet*.exe from registry
 
 void LogEvent(UINT message, WPARAM wParam, LPARAM lParam);
+void LogError(LPCWSTR fun);
+
 LPWSTR makeCommandLine(HKEY subkey);
 LPWSTR makeCommand(HKEY subkey);
 void SetControlFromReg(HWND hCtrl, HKEY subkey, LPCWSTR regKey);
@@ -34,6 +36,9 @@ struct child_handles {
     HANDLE waitHandle;
     DWORD dwProcessId;
     HWND hWnd;
+    HANDLE inputReadSide, outputWriteSide;
+    HANDLE outputReadSide, inputWriteSide;
+    HPCON hPcon;
 };
 
 struct child_handles* StartIt(HKEY subkey);
@@ -53,12 +58,13 @@ LRESULT WINAPI ScreenSaverProc(HWND hWnd,
     static bool quitOnExit = false;
     static HKEY hSubkey = (HKEY)INVALID_HANDLE_VALUE;
 
-#if 0
-    LogEvent(message, wParam, lParam);
-#endif
+    if (hEventLog == NULL)
+        RegisterEventSource(NULL, PROVIDER_NAME);
+    //LogEvent(message, wParam, lParam);
 
     switch (message)
     {
+
     case WM_CREATE:
     {
         if (hEventLog == NULL)
@@ -75,8 +81,6 @@ LRESULT WINAPI ScreenSaverProc(HWND hWnd,
             hEventLog = RegisterEventSource(NULL, PROVIDER_NAME);
 
         uTimer = SetTimer(hWnd, 1, 10000, NULL);
-        if (runningProc == NULL)
-            runningProc = StartIt(hSubkey);
         break;
     }
     case WM_DESTROY:
@@ -94,38 +98,19 @@ LRESULT WINAPI ScreenSaverProc(HWND hWnd,
         break;
 
     case WM_TIMER:
-    {
         if (quitOnExit)
             break;
 
         if (runningProc == NULL)
             runningProc = StartIt(hSubkey);
-
-        HDC hDC;
-        RECT rc = { 0 };
-        PAINTSTRUCT ps = { 0 };
-
-        hDC = BeginPaint(hWnd, &ps);
-
-        GetClientRect(hWnd, &rc);
-        FillRect(hDC, &rc, (HBRUSH)GetStockObject(BLACK_BRUSH));
-
-        SetBkColor(hDC, RGB(0, 0, 0));
-
-        if (runningProc == NULL)
-            SetTextColor(hDC, RGB(255, 0, 0));
-        else
-            SetTextColor(hDC, RGB(120, 120, 120));
-
-        if (fChildPreview)
-            TextOut(hDC, 2, 45, L"FishnetSaver", (int)wcslen(L"FishnetSaver"));
-        else
-            TextOut(hDC, GetSystemMetrics(SM_CXSCREEN) / 2,
-                GetSystemMetrics(SM_CYSCREEN) / 2, L"FishnetSaver", (int)wcslen(L"FishnetSaver"));
-
-        EndPaint(hWnd, &ps);
+        OutputDebugString(runningProc ? TEXT("timer: proc not null\n") : TEXT("timer: proc is null\n"));
+        {
+            RECT wrec = { 0 };
+            GetWindowRect(hWnd, &wrec);
+            InvalidateRect(hWnd, &wrec, TRUE);
+        }
+        PostMessage(hWnd, WM_PAINT, 0, 0);
         break;
-    }
 
     case WM_ERASEBKGND:
     {
@@ -143,6 +128,7 @@ LRESULT WINAPI ScreenSaverProc(HWND hWnd,
         RECT rc = { 0 };
         PAINTSTRUCT ps = { 0 };
 
+        OutputDebugString(runningProc ? TEXT("paint: proc not null\n") : TEXT("print: proc is null\n"));
         hDC = BeginPaint(hWnd, &ps);
 
         GetClientRect(hWnd, &rc);
@@ -159,7 +145,7 @@ LRESULT WINAPI ScreenSaverProc(HWND hWnd,
             TextOut(hDC, 2, 45, L"FishnetSaver", (int)wcslen(L"FishnetSaver"));
         else
             TextOut(hDC, GetSystemMetrics(SM_CXSCREEN) / 2,
-                GetSystemMetrics(SM_CYSCREEN) / 2, L"FishnetSaver", (int)wcslen(L"FishnetSaver"));
+                GetSystemMetrics(SM_CYSCREEN) / 2, TEXT("FishnetSaver"), (int)wcslen(L"FishnetSaver"));
 
         EndPaint(hWnd, &ps);
         break;
@@ -167,9 +153,13 @@ LRESULT WINAPI ScreenSaverProc(HWND hWnd,
     case WM_PROCESS_EXITED:
     {
         struct child_handles* ch = reinterpret_cast<struct child_handles*>(lParam);
-        OutputDebugStringW(L"ProcessExited");
         CloseHandle(ch->hProcess);
         CloseHandle(ch->hThread);
+        CloseHandle(ch->inputReadSide);
+        CloseHandle(ch->inputWriteSide);
+        CloseHandle(ch->outputReadSide);
+        CloseHandle(ch->outputWriteSide);
+        ClosePseudoConsole(ch->hPcon);
         (void) UnregisterWait(ch->waitHandle);
         if (runningProc == ch)
             runningProc = NULL;
@@ -255,21 +245,61 @@ StartIt(HKEY subkey) {
     LPWSTR command = NULL;
     LPWSTR commandline = NULL;
     struct child_handles* ch = NULL;
-    STARTUPINFO si;
+    STARTUPINFOEX si;
     PROCESS_INFORMATION pi;
+    size_t bytesRequired;
+    COORD size = { 80, 80 };
 
     OutputDebugStringW(L"Starting Process\n");
+
+    ZeroMemory(&si, sizeof(si));
+    ZeroMemory(&pi, sizeof(pi));
 
     ch = (struct child_handles *)LocalAlloc(LPTR, sizeof(*ch));
     if (ch == NULL)
         return (NULL);
+    ch->inputReadSide = ch->inputWriteSide = INVALID_HANDLE_VALUE;
+    ch->outputReadSide = ch->outputWriteSide = INVALID_HANDLE_VALUE;
+    ch->hPcon = INVALID_HANDLE_VALUE;
 
-    ZeroMemory(&si, sizeof(si));
-    si.cb = sizeof(si);
-    si.dwFlags |= STARTF_USESHOWWINDOW;
-    si.wShowWindow = SW_FORCEMINIMIZE | SW_MINIMIZE;
+    si.StartupInfo.cb = sizeof(si);
+    si.StartupInfo.dwFlags |= STARTF_USESHOWWINDOW;
+    si.StartupInfo.wShowWindow = SW_FORCEMINIMIZE | SW_MINIMIZE | SW_HIDE | SW_SHOWDEFAULT;
 
-    ZeroMemory(&pi, sizeof(pi));
+    if (!CreatePipe(&ch->inputReadSide, &ch->inputWriteSide, NULL, 0)) {
+        LogError(L"CreatePipe(input)");
+        goto errout;
+    }
+
+    if (!CreatePipe(&ch->outputReadSide, &ch->outputWriteSide, NULL, 0)) {
+        LogError(L"CreatePipe(output)");
+        goto errout;
+    }
+
+    HRESULT hr;
+    hr = CreatePseudoConsole(size, ch->inputReadSide, ch->outputWriteSide, 0, &ch->hPcon);
+    if (FAILED(hr))
+        LogError(L"CreatePseudoConsole");
+
+    bytesRequired = 0;
+    InitializeProcThreadAttributeList(NULL, 1, 0, &bytesRequired);
+    si.lpAttributeList = (PPROC_THREAD_ATTRIBUTE_LIST)LocalAlloc(LMEM_FIXED, bytesRequired);
+    if (!si.lpAttributeList) {
+        SetLastError(ERROR_OUTOFMEMORY);
+        LogError(L"LocalAlloc");
+        goto errout;
+    }
+
+    if (!InitializeProcThreadAttributeList(si.lpAttributeList, 1, 0, &bytesRequired)) {
+        LogError(L"InitializeProcThreadAttributeList");
+        goto errout;
+    }
+
+    if (!UpdateProcThreadAttribute(si.lpAttributeList, 0,
+        PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, ch->hPcon, sizeof(ch->hPcon), NULL, NULL)) {
+        LogError(L"UpdateProcThreadAttribute");
+        goto errout;
+    }
 
     command = makeCommand(subkey);
     if (command == NULL)
@@ -284,12 +314,12 @@ StartIt(HKEY subkey) {
         NULL,       // process handler not inheritable
         NULL,       // thread handle not inheritable
         FALSE,      // Set handle inheritance to FALSE
-        0,
+        EXTENDED_STARTUPINFO_PRESENT,
         NULL,       // use parent environment block
         NULL,       // use parent starting directory
-        &si,        // STARTUPINFO
+        &si.StartupInfo,        // STARTUPINFO
         &pi)) {     // PROCESS_INFORMATION
-        //DebugError("CreateProcess");
+        LogError(L"CreateProcess");
         goto errout;
     }
 
@@ -304,13 +334,35 @@ StartIt(HKEY subkey) {
     ch->dwProcessId = pi.dwProcessId;
     //DebugPrintf("hprocess %x hThread %x dwProcessId %x\n", ch->hProcess, ch->hThread, ch->dwProcessId);
 
-    RegisterWaitForSingleObject(&ch->waitHandle, ch->hProcess, ProcessReaper, ch, INFINITE, WT_EXECUTEONLYONCE);
+    if (!RegisterWaitForSingleObject(&ch->waitHandle, ch->hProcess, ProcessReaper, ch, INFINITE, WT_EXECUTEONLYONCE))
+        LogError(L"RegistryWaitForSingleObject");
+
+    SetLastError(0);
+    LogError(L"Process started?");
+
     return ch;
 
 errout:
+    if (ch) {
+        if (ch->inputReadSide != INVALID_HANDLE_VALUE)
+            CloseHandle(ch->inputReadSide);
+        if (ch->outputReadSide != INVALID_HANDLE_VALUE)
+            CloseHandle(ch->outputReadSide);
+        if (ch->inputWriteSide != INVALID_HANDLE_VALUE)
+            CloseHandle(ch->inputWriteSide);
+        if (ch->outputWriteSide != INVALID_HANDLE_VALUE)
+            CloseHandle(ch->outputWriteSide);
+    }
+    if (ch->hPcon != INVALID_HANDLE_VALUE)
+        ClosePseudoConsole(ch->hPcon);
+
+    if (si.lpAttributeList)
+        LocalFree(si.lpAttributeList);
+
     LocalFree(ch);
     LocalFree(commandline);
     LocalFree(command);
+
     return (NULL);
 }
 
@@ -329,35 +381,20 @@ ProcessReaper(
 void
 StopIt(struct child_handles* ch) {
     OutputDebugStringW(L"Stopping Process\n");
-    if (!FreeConsole())
-        OutputDebugString(L"Freeing my own console failed\n");
-    else
-        OutputDebugString(L"Freed my own console\n");
 
-    if (!AttachConsole(ch->dwProcessId)) {
-        DWORD e = GetLastError();
-        switch (e) {
-        case ERROR_ACCESS_DENIED:
-            OutputDebugStringW(L"AttachConsole: failed: access denied\n");
-            break;
-        case ERROR_INVALID_HANDLE:
-            OutputDebugStringW(L"AttachConsole: failed: invalid handle\n");
-            break;
-        case ERROR_INVALID_PARAMETER:
-            OutputDebugStringW(L"AttachConsole: failed: invalid param\n");
-            break;
-        default:
-            OutputDebugStringW(L"AttachConsole: failed: other\n");
-            break;
-        }
-    }
+    // If we have a console, we have to ditch it.
+    if (GetConsoleWindow() != NULL && !FreeConsole())
+        LogError(L"FreeConsole");
+
+    if (!AttachConsole(ch->dwProcessId))
+        LogError(L"AttachConsole");
 
     if (!SetConsoleCtrlHandler(NULL, true))
-        OutputDebugString(L"SetConsoleCtrlHandler: failed\n");
+        LogError(L"SetConsoleCtrlHandler");
+
     if (!GenerateConsoleCtrlEvent(CTRL_C_EVENT, ch->dwProcessId))
-        OutputDebugString(L"GenerateConsoleCtrlEvent: failed\n");
-    if (!FreeConsole())
-        OutputDebugString(L"FreeConsole: failed");
+        LogError(L"GenerateConsoleCtrlEvent");
+
     OutputDebugStringW(L"Stopped Process?\n");
 }
 
@@ -385,6 +422,25 @@ LogEvent(UINT message, WPARAM wParam, LPARAM lParam)
     pInsertStrings[1] = s;
     ReportEvent(hEventLog, EVENTLOG_INFORMATION_TYPE, GENERAL_CATEGORY, MSG_FUNCTION_ERROR, NULL, 2, 0, pInsertStrings, NULL);
     LocalFree(s);
+}
+
+void
+LogError(LPCWSTR fun)
+{
+    if (hEventLog == NULL)
+        return;
+
+    LPCWSTR pInsertStrings[2] = { fun, NULL };
+
+    DWORD buflen = FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER |
+        FORMAT_MESSAGE_FROM_SYSTEM |
+        FORMAT_MESSAGE_IGNORE_INSERTS,
+        NULL, GetLastError(), MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        (LPTSTR)&pInsertStrings[1], 0, NULL);
+    if (pInsertStrings[1] != NULL) {
+        ReportEvent(hEventLog, EVENTLOG_ERROR_TYPE, GENERAL_CATEGORY, MSG_FUNCTION_ERROR, NULL, 2, 0, pInsertStrings, NULL);
+        LocalFree((HLOCAL)pInsertStrings[1]);
+    }
 }
 
 LPWSTR
