@@ -63,6 +63,8 @@ section
 	file x64\release\fishnet-x86_64-pc-windows-msvc.exe
 	file FishnetSaver\messages.dll
 
+	delete $SYSDIR\FishnetSaver.scr
+
 	copyfiles $INSTDIR\FishnetSaver.scr $SYSDIR
 
 	# log/debugging provider
@@ -73,7 +75,7 @@ section
 	WriteRegStr HKLM $LogProviderKey "ParameterMessageFile" "$INSTDIR\messages.dll"
 
 	WriteRegStr HKLM $FishnetKey "Key" $thekey
-	WriteRegStr HKLM $FishnetKey "Program" "$INSTDIR\fishnet-x86_64-pc-windows-msvc.exe"
+	WriteRegStr HKLM $FishnetKey "Program" "$INSTDIR\DummyFish.exe"
 
 	# Set the logon screensaver
 	WriteRegStr HKU ".DEFAULT\Control Panel\Desktop" "SCRNSAVE.EXE" "$SYSDIR\FishnetSaver.scr"
