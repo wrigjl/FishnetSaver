@@ -7,6 +7,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "FishnetSaver", "FishnetSave
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "DummyFish", "DummyFish\DummyFish.vcxproj", "{6F6FF5BC-4493-4E25-8A5B-19B75A39F7F9}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "FishWrapper", "FishWrapper\FishWrapper.vcxproj", "{8CE6AAE9-7853-4782-828E-FA9E9C53233D}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -31,6 +33,14 @@ Global
 		{6F6FF5BC-4493-4E25-8A5B-19B75A39F7F9}.Release|x64.Build.0 = Release|x64
 		{6F6FF5BC-4493-4E25-8A5B-19B75A39F7F9}.Release|x86.ActiveCfg = Release|Win32
 		{6F6FF5BC-4493-4E25-8A5B-19B75A39F7F9}.Release|x86.Build.0 = Release|Win32
+		{8CE6AAE9-7853-4782-828E-FA9E9C53233D}.Debug|x64.ActiveCfg = Debug|x64
+		{8CE6AAE9-7853-4782-828E-FA9E9C53233D}.Debug|x64.Build.0 = Debug|x64
+		{8CE6AAE9-7853-4782-828E-FA9E9C53233D}.Debug|x86.ActiveCfg = Debug|Win32
+		{8CE6AAE9-7853-4782-828E-FA9E9C53233D}.Debug|x86.Build.0 = Debug|Win32
+		{8CE6AAE9-7853-4782-828E-FA9E9C53233D}.Release|x64.ActiveCfg = Release|x64
+		{8CE6AAE9-7853-4782-828E-FA9E9C53233D}.Release|x64.Build.0 = Release|x64
+		{8CE6AAE9-7853-4782-828E-FA9E9C53233D}.Release|x86.ActiveCfg = Release|Win32
+		{8CE6AAE9-7853-4782-828E-FA9E9C53233D}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
