@@ -15,16 +15,13 @@
 #define PROVIDER_NAME L"FishnetProvider"
 #define REGISTRY_LOCATION L"Software\\FishnetSaver"
 
-// TODO
-// - get/store key from registry (configure dialog, etc)
-// - get/store path to fishnet*.exe from registry
-
 void LogEvent(UINT message, WPARAM wParam, LPARAM lParam);
 void LogError(LPCWSTR fun);
+void LogError(LPCWSTR fun, LRESULT lr);
 
 LPWSTR makeCommandLine(HKEY subkey);
 LPWSTR makeCommand(HKEY subkey);
-void SetControlFromReg(HWND hCtrl, HKEY subkey, LPCWSTR regKey);
+void SetControlFromReg(HWND hCtrl, HKEY subkey, LPCWSTR regKey, HWND xx);
 void SetRegFromControl(HWND hCtrl, HKEY subkey, LPCWSTR regKey);
 
 #if 0
@@ -32,13 +29,10 @@ HRESULT BasicFileOpen(void);
 #endif
 
 struct child_handles {
-    HANDLE hProcess, hThread;
+    HANDLE hProcess;
     HANDLE waitHandle;
-    DWORD dwProcessId;
     HWND hWnd;
-    HANDLE inputReadSide, outputWriteSide;
-    HANDLE outputReadSide, inputWriteSide;
-    HPCON hPcon;
+    HANDLE hStdin, hStdout;
 };
 
 struct child_handles* StartIt(HKEY subkey);
@@ -75,6 +69,7 @@ LRESULT WINAPI ScreenSaverProc(HWND hWnd,
             NULL, &hSubkey, NULL);
         if (lp != ERROR_SUCCESS) {
             hSubkey = (HKEY)INVALID_HANDLE_VALUE;
+            LogError(TEXT("RegCreateKeyExe"));
         }
 
         if (hEventLog == NULL)
@@ -103,13 +98,12 @@ LRESULT WINAPI ScreenSaverProc(HWND hWnd,
 
         if (runningProc == NULL)
             runningProc = StartIt(hSubkey);
-        OutputDebugString(runningProc ? TEXT("timer: proc not null\n") : TEXT("timer: proc is null\n"));
+
         {
             RECT wrec = { 0 };
             GetWindowRect(hWnd, &wrec);
             InvalidateRect(hWnd, &wrec, TRUE);
         }
-        PostMessage(hWnd, WM_PAINT, 0, 0);
         break;
 
     case WM_ERASEBKGND:
@@ -122,6 +116,7 @@ LRESULT WINAPI ScreenSaverProc(HWND hWnd,
         ReleaseDC(hWnd, hDC);
         break;
     }
+
     case WM_PAINT:
     {
         HDC hDC;
@@ -154,18 +149,26 @@ LRESULT WINAPI ScreenSaverProc(HWND hWnd,
     {
         struct child_handles* ch = reinterpret_cast<struct child_handles*>(lParam);
         CloseHandle(ch->hProcess);
-        CloseHandle(ch->hThread);
-        CloseHandle(ch->inputReadSide);
-        CloseHandle(ch->inputWriteSide);
-        CloseHandle(ch->outputReadSide);
-        CloseHandle(ch->outputWriteSide);
-        ClosePseudoConsole(ch->hPcon);
         (void) UnregisterWait(ch->waitHandle);
+        if (ch->hStdin != INVALID_HANDLE_VALUE) {
+            CloseHandle(ch->hStdin);
+            ch->hStdin = INVALID_HANDLE_VALUE;
+        }
+        if (ch->hStdout != INVALID_HANDLE_VALUE) {
+            CloseHandle(ch->hStdout);
+            ch->hStdout = INVALID_HANDLE_VALUE;
+        }
         if (runningProc == ch)
             runningProc = NULL;
         LocalFree(ch);
         if (quitOnExit)
             PostQuitMessage(0);
+        {
+            RECT wrec = { 0 };
+            GetWindowRect(hWnd, &wrec);
+            InvalidateRect(hWnd, &wrec, TRUE);
+        }
+
         break;
     }
 
@@ -198,13 +201,14 @@ BOOL WINAPI ScreenSaverConfigureDialog(HWND hDlg,
             NULL, &hSubkey, NULL);
         if (lp != ERROR_SUCCESS) {
             hSubkey = (HKEY)INVALID_HANDLE_VALUE;
+            LogError(TEXT("RegCreateKeyExe"));
         }
 
         hFishnetKey = GetDlgItem(hDlg, IDC_FISHNET_KEY);
-        SetControlFromReg(hFishnetKey, hSubkey, L"Key");
+        SetControlFromReg(hFishnetKey, hSubkey, L"Key", GetDlgItem(hDlg, IDC_EDIT1));
 
         hFishnetExe = GetDlgItem(hDlg, IDC_FISHNET_EXE);
-        SetControlFromReg(hFishnetExe, hSubkey, L"Program");
+        SetControlFromReg(hFishnetExe, hSubkey, L"Program", GetDlgItem(hDlg, IDC_EDIT1));
 
         hOk = GetDlgItem(hDlg, ID_OK);
 
@@ -245,12 +249,19 @@ StartIt(HKEY subkey) {
     LPWSTR command = NULL;
     LPWSTR commandline = NULL;
     struct child_handles* ch = NULL;
-    STARTUPINFOEX si;
+    STARTUPINFO si;
     PROCESS_INFORMATION pi;
-    size_t bytesRequired;
-    COORD size = { 80, 80 };
+    HANDLE inputWriteSide = INVALID_HANDLE_VALUE;
+    HANDLE inputReadSide = INVALID_HANDLE_VALUE;
+    HANDLE outputWriteSide = INVALID_HANDLE_VALUE;
+    HANDLE outputReadSide = INVALID_HANDLE_VALUE;
+    SECURITY_ATTRIBUTES saAttr;
 
     OutputDebugStringW(L"Starting Process\n");
+
+    saAttr.nLength = sizeof(saAttr);
+    saAttr.bInheritHandle = TRUE;
+    saAttr.lpSecurityDescriptor = NULL;
 
     ZeroMemory(&si, sizeof(si));
     ZeroMemory(&pi, sizeof(pi));
@@ -258,46 +269,30 @@ StartIt(HKEY subkey) {
     ch = (struct child_handles *)LocalAlloc(LPTR, sizeof(*ch));
     if (ch == NULL)
         return (NULL);
-    ch->inputReadSide = ch->inputWriteSide = INVALID_HANDLE_VALUE;
-    ch->outputReadSide = ch->outputWriteSide = INVALID_HANDLE_VALUE;
-    ch->hPcon = INVALID_HANDLE_VALUE;
+    ch->hStdin = INVALID_HANDLE_VALUE;
+    ch->hStdout = INVALID_HANDLE_VALUE;
 
-    si.StartupInfo.cb = sizeof(si);
-    si.StartupInfo.dwFlags |= STARTF_USESHOWWINDOW;
-    si.StartupInfo.wShowWindow = SW_FORCEMINIMIZE | SW_MINIMIZE | SW_HIDE | SW_SHOWDEFAULT;
+    si.cb = sizeof(si);
 
-    if (!CreatePipe(&ch->inputReadSide, &ch->inputWriteSide, NULL, 0)) {
-        LogError(L"CreatePipe(input)");
+    if (!CreatePipe(&inputReadSide, &inputWriteSide, &saAttr, 0)) {
+        LogError(TEXT("CreatePipe(in)"));
         goto errout;
     }
 
-    if (!CreatePipe(&ch->outputReadSide, &ch->outputWriteSide, NULL, 0)) {
-        LogError(L"CreatePipe(output)");
+    if (!SetHandleInformation(inputWriteSide, HANDLE_FLAG_INHERIT, 0)) {
+        // handle should not be inherited
+        LogError(TEXT("SetHandleInformation(in)"));
         goto errout;
     }
 
-    HRESULT hr;
-    hr = CreatePseudoConsole(size, ch->inputReadSide, ch->outputWriteSide, 0, &ch->hPcon);
-    if (FAILED(hr))
-        LogError(L"CreatePseudoConsole");
-
-    bytesRequired = 0;
-    InitializeProcThreadAttributeList(NULL, 1, 0, &bytesRequired);
-    si.lpAttributeList = (PPROC_THREAD_ATTRIBUTE_LIST)LocalAlloc(LMEM_FIXED, bytesRequired);
-    if (!si.lpAttributeList) {
-        SetLastError(ERROR_OUTOFMEMORY);
-        LogError(L"LocalAlloc");
+    if (!CreatePipe(&outputReadSide, &outputWriteSide, &saAttr, 0)) {
+        LogError(TEXT("CreatePipe(out)"));
         goto errout;
     }
 
-    if (!InitializeProcThreadAttributeList(si.lpAttributeList, 1, 0, &bytesRequired)) {
-        LogError(L"InitializeProcThreadAttributeList");
-        goto errout;
-    }
-
-    if (!UpdateProcThreadAttribute(si.lpAttributeList, 0,
-        PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, ch->hPcon, sizeof(ch->hPcon), NULL, NULL)) {
-        LogError(L"UpdateProcThreadAttribute");
+    if (!SetHandleInformation(outputReadSide, HANDLE_FLAG_INHERIT, 0)) {
+        // handle should not be inherited
+        LogError(TEXT("SetHandleInformation(out)"));
         goto errout;
     }
 
@@ -309,30 +304,45 @@ StartIt(HKEY subkey) {
     if (command == NULL)
         goto errout;
 
+    si.dwFlags |= STARTF_USESTDHANDLES;
+    si.hStdInput = inputReadSide;
+    si.hStdOutput = outputWriteSide;
+    si.hStdError = outputWriteSide;
+
     if (!CreateProcess(command,
         commandline,
         NULL,       // process handler not inheritable
         NULL,       // thread handle not inheritable
-        FALSE,      // Set handle inheritance to FALSE
-        EXTENDED_STARTUPINFO_PRESENT,
+        TRUE,      // Set handle inheritance to FALSE
+        DETACHED_PROCESS,
         NULL,       // use parent environment block
         NULL,       // use parent starting directory
-        &si.StartupInfo,        // STARTUPINFO
+        &si,        // STARTUPINFO
         &pi)) {     // PROCESS_INFORMATION
         LogError(L"CreateProcess");
         goto errout;
     }
+
+    // handle of child thread, unneeded
+    CloseHandle(pi.hThread);
+
+    // handle passed to child, unreference
+    CloseHandle(inputReadSide);
+    inputReadSide = INVALID_HANDLE_VALUE;
+
+    // handle passed to child, unreference
+    CloseHandle(outputWriteSide);
+    outputWriteSide = INVALID_HANDLE_VALUE;
+
+    ch->hStdin = inputWriteSide;
+    ch->hStdout = outputReadSide;
 
     OutputDebugStringW(L"Process created\n");
 
     LocalFree(command);
     LocalFree(commandline);
     commandline = NULL;
-
     ch->hProcess = pi.hProcess;
-    ch->hThread = pi.hThread;
-    ch->dwProcessId = pi.dwProcessId;
-    //DebugPrintf("hprocess %x hThread %x dwProcessId %x\n", ch->hProcess, ch->hThread, ch->dwProcessId);
 
     if (!RegisterWaitForSingleObject(&ch->waitHandle, ch->hProcess, ProcessReaper, ch, INFINITE, WT_EXECUTEONLYONCE))
         LogError(L"RegistryWaitForSingleObject");
@@ -343,23 +353,23 @@ StartIt(HKEY subkey) {
     return ch;
 
 errout:
-    if (ch) {
-        if (ch->inputReadSide != INVALID_HANDLE_VALUE)
-            CloseHandle(ch->inputReadSide);
-        if (ch->outputReadSide != INVALID_HANDLE_VALUE)
-            CloseHandle(ch->outputReadSide);
-        if (ch->inputWriteSide != INVALID_HANDLE_VALUE)
-            CloseHandle(ch->inputWriteSide);
-        if (ch->outputWriteSide != INVALID_HANDLE_VALUE)
-            CloseHandle(ch->outputWriteSide);
+    if (ch != NULL) {
+        if (ch->hStdin != INVALID_HANDLE_VALUE)
+            CloseHandle(ch->hStdin);
+        if (ch->hStdout != INVALID_HANDLE_VALUE)
+            CloseHandle(ch->hStdin);
     }
-    if (ch->hPcon != INVALID_HANDLE_VALUE)
-        ClosePseudoConsole(ch->hPcon);
-
-    if (si.lpAttributeList)
-        LocalFree(si.lpAttributeList);
-
     LocalFree(ch);
+
+    if (inputWriteSide != INVALID_HANDLE_VALUE)
+        CloseHandle(inputWriteSide);
+    if (inputReadSide != INVALID_HANDLE_VALUE)
+        CloseHandle(inputReadSide);
+    if (outputWriteSide != INVALID_HANDLE_VALUE)
+        CloseHandle(outputWriteSide);
+    if (outputReadSide != INVALID_HANDLE_VALUE)
+        CloseHandle(outputReadSide);
+
     LocalFree(commandline);
     LocalFree(command);
 
@@ -380,22 +390,11 @@ ProcessReaper(
 
 void
 StopIt(struct child_handles* ch) {
-    OutputDebugStringW(L"Stopping Process\n");
-
-    // If we have a console, we have to ditch it.
-    if (GetConsoleWindow() != NULL && !FreeConsole())
-        LogError(L"FreeConsole");
-
-    if (!AttachConsole(ch->dwProcessId))
-        LogError(L"AttachConsole");
-
-    if (!SetConsoleCtrlHandler(NULL, true))
-        LogError(L"SetConsoleCtrlHandler");
-
-    if (!GenerateConsoleCtrlEvent(CTRL_C_EVENT, ch->dwProcessId))
-        LogError(L"GenerateConsoleCtrlEvent");
-
-    OutputDebugStringW(L"Stopped Process?\n");
+    // All we really need to do is close the client handles
+    CloseHandle(ch->hStdin);
+    ch->hStdin = INVALID_HANDLE_VALUE;
+    CloseHandle(ch->hStdout);
+    ch->hStdout = INVALID_HANDLE_VALUE;
 }
 
 void
@@ -443,9 +442,36 @@ LogError(LPCWSTR fun)
     }
 }
 
+void
+LogError(LPCWSTR fun, LRESULT lr)
+{
+    if (hEventLog == NULL)
+        return;
+
+    LPCWSTR pInsertStrings[2] = { fun, NULL };
+
+    DWORD buflen = FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER |
+        FORMAT_MESSAGE_FROM_SYSTEM |
+        FORMAT_MESSAGE_IGNORE_INSERTS,
+        NULL, (DWORD)lr, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        (LPTSTR)&pInsertStrings[1], 0, NULL);
+    if (pInsertStrings[1] != NULL) {
+        ReportEvent(hEventLog, EVENTLOG_ERROR_TYPE, GENERAL_CATEGORY, MSG_FUNCTION_ERROR, NULL, 2, 0, pInsertStrings, NULL);
+        LocalFree((HLOCAL)pInsertStrings[1]);
+    }
+}
+
 LPWSTR
 makeCommand(HKEY subkey)
 {
+#if 1
+    LPWSTR val = NULL;
+    std::wstringstream ss;
+
+    ss << TEXT("C:\\Users\\jason\\source\\repos\\FishnetSaver\\x64\\Release\\FishWrapper.exe");
+    val = _wcsdup(ss.str().c_str());
+    return val;
+#else
     DWORD keylen;
     LPWSTR val = NULL;
     std::wstringstream ss;
@@ -469,11 +495,30 @@ makeCommand(HKEY subkey)
     }
 
     return val;
+#endif
 }
 
 LPWSTR
 makeCommandLine(HKEY subkey)
 {
+#if 1
+    LPWSTR val = NULL;
+    std::wstringstream ss;
+
+    ss << "\"";
+    ss << TEXT("C:\\Users\\jason\\source\\repos\\FishnetSaver\\x64\\Release\\FishWrapper.exe");
+    ss << "\"";
+
+    ss << " \"";
+    ss << TEXT("C:\\Users\\jason\\source\\repos\\FishnetSaver\\x64\\Release\\DummyFish.exe");
+    ss << "\"";
+
+    ss << " --key \"" << TEXT("mykey") << '"';
+    ss << " --no-conf run";
+
+    val = _wcsdup(ss.str().c_str());
+    return val;
+#else
     DWORD keylen = 0;
     LPWSTR val = NULL;
     std::wstringstream ss;
@@ -524,32 +569,41 @@ makeCommandLine(HKEY subkey)
     if (s != NULL)
         lstrcpyW(s, ss.str().c_str());
     return s;
+#endif
 }
 
 void
-SetControlFromReg(HWND hCtrl, HKEY subkey, LPCWSTR regKey)
+SetControlFromReg(HWND hCtrl, HKEY subkey, LPCWSTR regKey, HWND xx)
 {
     DWORD keylen;
+    LRESULT lr;
+
+    SendMessage(xx, WM_SETTEXT, 0, (LPARAM)regKey);
 
     keylen = 0;
-    if (RegGetValueW(subkey, NULL, regKey, RRF_RT_REG_SZ, NULL, NULL, &keylen) != ERROR_SUCCESS) {
-        // XXX error handling
+    lr = RegGetValueW(subkey, NULL, regKey, RRF_RT_REG_SZ, NULL, NULL, &keylen);
+    if (lr != ERROR_SUCCESS) {
+        LogError(TEXT("RegGetValueW"), lr);
+        SendMessage(xx, WM_SETTEXT, 0, (LPARAM)TEXT("RegGetValue"));
         return;
     }
 
     LPWSTR val = (LPWSTR)LocalAlloc(LMEM_FIXED, keylen);
     if (val == NULL) {
-        // XXX error handling
+        LogError(TEXT("LocalAlloc(regkey)"));
+        SendMessage(xx, WM_SETTEXT, 0, (LPARAM)TEXT("LocalAlloc"));
         return;
     }
 
     if (RegGetValue(subkey, NULL, regKey, RRF_RT_REG_SZ, NULL, val, &keylen) != ERROR_SUCCESS) {
         LocalFree(val);
-        // XXX error handling
+        LogError(TEXT("RegGetValue2"));
+        SendMessage(xx, WM_SETTEXT, 0, (LPARAM)TEXT("RegGetValue2"));
         return;
     }
 
     SendMessage(hCtrl, WM_SETTEXT, 0, (LPARAM)val);
+    SendMessage(xx, WM_SETTEXT, 0, (LPARAM)TEXT("done"));
     LocalFree(val);
 }
 
