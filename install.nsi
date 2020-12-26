@@ -60,6 +60,7 @@ section
 
 	file x64\release\DummyFish.exe
 	file x64\release\FishnetSaver.scr
+	file x64\release\FishWrapper.exe
 	file x64\release\fishnet-x86_64-pc-windows-msvc.exe
 	file FishnetSaver\messages.dll
 
