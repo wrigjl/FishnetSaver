@@ -99,6 +99,7 @@ section "Uninstall"
 	Delete $INSTDIR\messages.dll
 	Delete $INSTDIR\FishnetSaver.scr
 	Delete $INSTDIR\DummyFish.exe
+	Delete $INSTDIR\FishWrapper.exe
 	Rmdir $INSTDIR
 
 	strcpy $LogProviderKey "SYSTEM\CurrentControlSet\services\eventlog\Application\FishnetProvider"
