@@ -21,7 +21,7 @@
 #include <Windows.h>
 #include <iostream>
 #include <sstream>
-#include <string>
+#include "messages.h"
 
 // how long to wait after we have asked the child to exit before we kill it (milliseconds)
 #define MAX_WAIT (5 * 60 * 1000)
@@ -30,11 +30,19 @@ void ShowError(LPCWSTR fun);
 void ShowError(LPCWSTR fun, HRESULT);
 void ShowError(LPCWSTR fun, LPCWSTR msg);
 
+void LogError(LPCWSTR fun);
+void LogError(LPCWSTR fun, LPCWSTR str);
+void LogError(LPCWSTR fun, LRESULT errcode);
+void LogInfo(LPCWSTR msg);
+
 LPWSTR MakeCommand(const wchar_t*);
 LPWSTR MakeCommandLine(int argc, wchar_t* argv[]);
 bool GetSomeStdin(HANDLE hStdin, DWORD pid, HANDLE pProcess);
 HRESULT PrepareStartupInformation(HPCON hpc, STARTUPINFOEX* psi);
 void DiscardPipe(PHANDLE phPipe, HANDLE hOut);
+
+#define PROVIDER_NAME L"FishnetProvider"
+HANDLE ghEventLog = INVALID_HANDLE_VALUE;
 
 int
 wmain(int argc, wchar_t* argv[], wchar_t* envp[])
@@ -55,6 +63,9 @@ wmain(int argc, wchar_t* argv[], wchar_t* envp[])
     SECURITY_ATTRIBUTES saAttr = { 0 };
     DWORD d = 0;
 
+    if (ghEventLog == NULL)
+        RegisterEventSource(NULL, PROVIDER_NAME);
+
     saAttr.nLength = sizeof(saAttr);
     saAttr.bInheritHandle = TRUE;
     saAttr.lpSecurityDescriptor = NULL;
@@ -66,28 +77,34 @@ wmain(int argc, wchar_t* argv[], wchar_t* envp[])
     pi.hProcess = INVALID_HANDLE_VALUE;
     pi.hThread = INVALID_HANDLE_VALUE;
 
+    ghEventLog = RegisterEventSource(NULL, PROVIDER_NAME);
+    if (ghEventLog == NULL) {
+        LogError(TEXT("RegisterEventSource"));
+        ghEventLog = INVALID_HANDLE_VALUE;
+    }
+
     if (argc < 2) {
-        std::wcerr << "usage: " << argv[0] << " prog [args]" << std::endl;
+        LogError(TEXT("Usage: "), TEXT("args"));
         return 2;
     }
 
     hStdout = GetStdHandle(STD_OUTPUT_HANDLE);
     if (hStdout == INVALID_HANDLE_VALUE) {
-        ShowError(TEXT("GetStdHandle(stdout)"));
+        LogError(TEXT("GetStdHandle(stdout)"));
         rc = 1;
         goto out;
     }
 
     d = PIPE_READMODE_BYTE | PIPE_NOWAIT;
-    if (SetNamedPipeHandleState(hStdout, &d, NULL, NULL)) {
-        ShowError(TEXT("SetNamedPipeHandleState(stdout)"));
+    if (!SetNamedPipeHandleState(hStdout, &d, NULL, NULL)) {
+        LogError(TEXT("SetNamedPipeHandleState(stdout)"));
         rc = 1;
         goto out;
     }
 
     hStdin = GetStdHandle(STD_INPUT_HANDLE);
     if (hStdin == INVALID_HANDLE_VALUE) {
-        ShowError(TEXT("GetStdHandle(stdin)"));
+        LogError(TEXT("GetStdHandle(stdin)"));
         rc = 1;
         goto out;
     }
@@ -97,34 +114,34 @@ wmain(int argc, wchar_t* argv[], wchar_t* envp[])
     saAttr.lpSecurityDescriptor = NULL;
 
     if (!CreatePipe(&inputReadSide, &inputWriteSide, &saAttr, 0)) {
-        ShowError(TEXT("CreatePipe"));
+        LogError(TEXT("CreatePipe"));
         rc = 1;
         goto out;
     }
 
     if (!SetHandleInformation(inputWriteSide, HANDLE_FLAG_INHERIT, 0)) {
         // handle should not be inherited
-        ShowError(TEXT("SetHandleInformation"));
+        LogError(TEXT("SetHandleInformation"));
         rc = 1;
         goto out;
     }
 
     if (!CreatePipe(&outputReadSide, &outputWriteSide, &saAttr, 0)) {
-        ShowError(TEXT("CreatePipe"));
+        LogError(TEXT("CreatePipe"));
         rc = 1;
         goto out;
     }
 
     if (!SetHandleInformation(outputReadSide, HANDLE_FLAG_INHERIT, 0)) {
         // handle should not be inherited
-        ShowError(TEXT("SetHandleInformation"));
+        LogError(TEXT("SetHandleInformation"));
         rc = 1;
         goto out;
     }
 
     hr = CreatePseudoConsole(size, inputReadSide, outputWriteSide, 0, &hPC);
     if (FAILED(hr)) {
-        ShowError(TEXT("CreatePseudoConsole"), hr);
+        LogError(TEXT("CreatePseudoConsole"), hr);
         rc = 1;
         goto out;
     }
@@ -134,7 +151,7 @@ wmain(int argc, wchar_t* argv[], wchar_t* envp[])
 
     hr = PrepareStartupInformation(hPC, &si);
     if (FAILED(hr)) {
-        ShowError(TEXT("CreatePseudoConsole"), hr);
+        LogError(TEXT("CreatePseudoConsole"), hr);
         rc = 1;
         goto out;
     }
@@ -147,7 +164,7 @@ wmain(int argc, wchar_t* argv[], wchar_t* envp[])
     if (!CreateProcess(command, commandLine,
         NULL, NULL, TRUE, EXTENDED_STARTUPINFO_PRESENT,
         NULL, NULL, &si.StartupInfo, &pi)) {
-        ShowError(TEXT("CreateProcess"));
+        LogError(TEXT("CreateProcess"));
         rc = 1;
         goto out;
     }
@@ -173,7 +190,7 @@ wmain(int argc, wchar_t* argv[], wchar_t* envp[])
         switch (wait) {
         case WAIT_OBJECT_0 + 0:
             // process exited
-            std::wcout << TEXT("process exited") << std::endl;
+            LogInfo(TEXT("process exited"));
             done = true;
             break;
         case WAIT_OBJECT_0 + 1:
@@ -184,7 +201,7 @@ wmain(int argc, wchar_t* argv[], wchar_t* envp[])
             DiscardPipe(&handles[2], hStdout);
             break;
         case WAIT_FAILED:
-            ShowError(TEXT("WaitForMultipleObjects"));
+            LogError(TEXT("WaitForMultipleObjects"));
             rc = 1;
             goto out;
         }
@@ -327,72 +344,71 @@ GetSomeStdin(HANDLE hStdin, DWORD pid, HANDLE hProcess)
 {
     TCHAR buf[80];
     BOOL bResult;
-    DWORD dwCharsRead = 0;
-    CONSOLE_READCONSOLE_CONTROL inputControl;
+    DWORD dwBytesRead = 0;
 
-    ZeroMemory(&inputControl, sizeof(inputControl));
-    inputControl.nLength = sizeof(inputControl);
-    inputControl.dwCtrlWakeupMask |= 1 << ('D' - '@');
-    inputControl.dwCtrlWakeupMask |= 1 << ('Z' - '@');
-    inputControl.dwControlKeyState |= LEFT_CTRL_PRESSED;
-
-    bResult = ReadConsole(hStdin, buf, sizeof(buf) / sizeof(buf[0]), &dwCharsRead, &inputControl);
+    bResult = ReadFile(hStdin, buf, sizeof(buf), &dwBytesRead, NULL);
     if (!bResult) {
-        ShowError(TEXT("ReadConsole"));
+        if (GetLastError() == ERROR_BROKEN_PIPE) {
+            LogInfo(TEXT("Pipe broken"));
+            goto out;
+        }
+        LogError(TEXT("ReadConsole"));
         return true;
     }
 
-    std::wcout << TEXT("Eof detected") << std::endl;
+out:
+    LogInfo(TEXT("EOF detected"));
 
     OutputDebugString(TEXT("Freeing console\n"));
     if (GetConsoleWindow() != NULL && !FreeConsole())
-        ShowError(TEXT("FreeConsole"));
+        LogError(TEXT("FreeConsole"));
 
     OutputDebugString(TEXT("attaching console\n"));
     if (!AttachConsole(pid))
-        ShowError(TEXT("AttachConsole"));
+        LogError(TEXT("AttachConsole"));
 
     OutputDebugString(TEXT("sethandler\n"));
     if (!SetConsoleCtrlHandler(NULL, TRUE))
-        ShowError(TEXT("SetConsoleCtrlHandler"));
+        LogError(TEXT("SetConsoleCtrlHandler"));
 
     OutputDebugString(TEXT("generate\n"));
     if (!GenerateConsoleCtrlEvent(CTRL_C_EVENT, pid))
-        ShowError(TEXT("GenerateConsoleCtrlEvent"));
+        LogError(TEXT("GenerateConsoleCtrlEvent"));
 
     OutputDebugString(TEXT("Freeing console 2"));
     if (!FreeConsole())
-        ShowError(TEXT("FreeConsole(sub)"));
+        LogError(TEXT("FreeConsole(sub)"));
 
-    std::wcout << "Waiting for process to end..." << std::endl;
+    LogInfo(TEXT("Waiting for process to end..."));
 
     DWORD wait = WaitForSingleObject(hProcess, MAX_WAIT);
 
     if (wait == WAIT_OBJECT_0) {
-        std::cout << "done" << std::endl;
+        LogInfo(TEXT("Waiting done"));
     }
     else if (wait == WAIT_FAILED) {
-        ShowError(TEXT("WaitForSingleObject(proc)"));
+        LogError(TEXT("WaitForSingleObject(proc)"));
     }
     else if (wait == WAIT_TIMEOUT) {
-        std::wcout << "We tried being nice..." << std::endl;
+        LogInfo(TEXT("We tried being nice..."));
         if (!TerminateProcess(hProcess, 1)) {
-            ShowError(TEXT("TerminateProcess"));
+            LogError(TEXT("TerminateProcess"));
             return true;
         }
 
         wait = WaitForSingleObject(hProcess, INFINITE);
         if (wait == WAIT_OBJECT_0) {
             // good, it exited
+            LogInfo(TEXT("Exit after terminate..."));
             return true;
         }
         if (wait == WAIT_FAILED) {
-            ShowError(TEXT("WaitForSingleObject(term)"));
+            LogError(TEXT("WaitForSingleObject(term)"));
             return true;
         }
     }
     else {
-        std::wcout << "Wait: " << wait << std::endl;
+        LogError(TEXT("Weird return value from WFMO"));
     }
 
     return true;
@@ -414,4 +430,62 @@ DiscardPipe(PHANDLE phPipe, HANDLE hOut)
     }
 
     WriteFile(hOut, buf, nRead, &nWrite, NULL);
+}
+
+
+void
+LogInfo(LPCWSTR msg)
+{
+    if (ghEventLog == INVALID_HANDLE_VALUE)
+        return;
+
+    LPCWSTR pInsertStrings[1] = { msg };
+    ReportEvent(ghEventLog, EVENTLOG_INFORMATION_TYPE, GENERAL_CATEGORY, MSG_FUNCTION_GENERIC, NULL, 1, 0, pInsertStrings, NULL);
+}
+
+void
+LogError(LPCWSTR fun)
+{
+    if (ghEventLog == INVALID_HANDLE_VALUE)
+        return;
+
+    LPCWSTR pInsertStrings[2] = { fun, NULL };
+
+    DWORD buflen = FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER |
+        FORMAT_MESSAGE_FROM_SYSTEM |
+        FORMAT_MESSAGE_IGNORE_INSERTS,
+        NULL, GetLastError(), MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        (LPTSTR)&pInsertStrings[1], 0, NULL);
+    if (pInsertStrings[1] != NULL) {
+        ReportEvent(ghEventLog, EVENTLOG_ERROR_TYPE, GENERAL_CATEGORY, MSG_FUNCTION_ERROR, NULL, 2, 0, pInsertStrings, NULL);
+        LocalFree((HLOCAL)pInsertStrings[1]);
+    }
+}
+
+void
+LogError(LPCWSTR fun, LRESULT lr)
+{
+    if (ghEventLog == INVALID_HANDLE_VALUE)
+        return;
+
+    LPCWSTR pInsertStrings[2] = { fun, NULL };
+
+    DWORD buflen = FormatMessage(FORMAT_MESSAGE_ALLOCATE_BUFFER |
+        FORMAT_MESSAGE_FROM_SYSTEM |
+        FORMAT_MESSAGE_IGNORE_INSERTS,
+        NULL, (DWORD)lr, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT),
+        (LPTSTR)&pInsertStrings[1], 0, NULL);
+    if (pInsertStrings[1] != NULL) {
+        ReportEvent(ghEventLog, EVENTLOG_ERROR_TYPE, GENERAL_CATEGORY, MSG_FUNCTION_ERROR, NULL, 2, 0, pInsertStrings, NULL);
+        LocalFree((HLOCAL)pInsertStrings[1]);
+    }
+}
+
+void LogError(LPCWSTR fun, LPCWSTR str)
+{
+    if (ghEventLog == INVALID_HANDLE_VALUE)
+        return;
+
+    LPCWSTR pInsertStrings[2] = { fun, str };
+    ReportEvent(ghEventLog, EVENTLOG_ERROR_TYPE, GENERAL_CATEGORY, MSG_FUNCTION_ERROR, NULL, 2, 0, pInsertStrings, NULL);
 }
