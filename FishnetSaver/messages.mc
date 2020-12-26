@@ -33,3 +33,12 @@ SymbolicName=MSG_FUNCTION_ERROR
 Language=English
 %1: %2
 .
+
+MessageId=0x101
+Severity=Error
+Facility=Runtime
+SymbolicName=MSG_FUNCTION_GENERIC
+Language=English
+%1
+.
+
