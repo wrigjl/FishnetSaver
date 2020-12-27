@@ -169,8 +169,10 @@ link /nologo /noentry /dll /machine:$(Platform) messages.res /out:messages.dll</
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="FishnetSaver.cpp" />
+    <ClCompile Include="registry.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="registry.h" />
     <ClInclude Include="resource.h" />
   </ItemGroup>
   <ItemGroup>

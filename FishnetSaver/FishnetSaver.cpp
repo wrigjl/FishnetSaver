@@ -5,12 +5,16 @@
 #include <shobjidl.h>
 #include <shobjidl_core.h>
 #include <Shlwapi.h>
-#include "messages.h"
-#include "resource.h"
 #include <string>
 #include <iostream>
 #include <fstream>
 #include <sstream>
+#include "messages.h"
+#include "resource.h"
+#include "registry.h"
+
+// TODO
+// - use wrapper registry key to find the wrapper program
 
 #define PROVIDER_NAME L"FishnetProvider"
 #define REGISTRY_LOCATION L"Software\\FishnetSaver"
@@ -20,7 +24,7 @@ void LogError(LPCWSTR fun);
 void LogError(LPCWSTR fun, LRESULT lr);
 
 LPWSTR makeCommandLine(HKEY subkey);
-LPWSTR makeCommand(HKEY subkey);
+std::wstring makeCommand(HKEY subkey);
 void SetControlFromReg(HWND hCtrl, HKEY subkey, LPCWSTR regKey, HWND xx);
 void SetRegFromControl(HWND hCtrl, HKEY subkey, LPCWSTR regKey);
 
@@ -245,8 +249,8 @@ BOOL WINAPI RegisterDialogClasses(HANDLE hInst)
 }
 
 struct child_handles *
-StartIt(HKEY subkey) {
-    LPWSTR command = NULL;
+    StartIt(HKEY subkey) {
+    std::wstring command;
     LPWSTR commandline = NULL;
     struct child_handles* ch = NULL;
     STARTUPINFO si;
@@ -266,7 +270,7 @@ StartIt(HKEY subkey) {
     ZeroMemory(&si, sizeof(si));
     ZeroMemory(&pi, sizeof(pi));
 
-    ch = (struct child_handles *)LocalAlloc(LPTR, sizeof(*ch));
+    ch = (struct child_handles*)LocalAlloc(LPTR, sizeof(*ch));
     if (ch == NULL)
         return (NULL);
     ch->hStdin = INVALID_HANDLE_VALUE;
@@ -296,20 +300,20 @@ StartIt(HKEY subkey) {
         goto errout;
     }
 
-    command = makeCommand(subkey);
-    if (command == NULL)
+    try {
+        command = makeCommand(subkey);
+        commandline = makeCommandLine(subkey);
+    }
+    catch (std::runtime_error&) {
         goto errout;
-
-    commandline = makeCommandLine(subkey);
-    if (command == NULL)
-        goto errout;
+    }
 
     si.dwFlags |= STARTF_USESTDHANDLES;
     si.hStdInput = inputReadSide;
     si.hStdOutput = outputWriteSide;
     si.hStdError = outputWriteSide;
 
-    if (!CreateProcess(command,
+    if (!CreateProcess(command.c_str(),
         commandline,
         NULL,       // process handler not inheritable
         NULL,       // thread handle not inheritable
@@ -322,6 +326,9 @@ StartIt(HKEY subkey) {
         LogError(L"CreateProcess");
         goto errout;
     }
+
+    free(commandline);
+    commandline = NULL;
 
     // handle of child thread, unneeded
     CloseHandle(pi.hThread);
@@ -339,9 +346,6 @@ StartIt(HKEY subkey) {
 
     OutputDebugStringW(L"Process created\n");
 
-    LocalFree(command);
-    LocalFree(commandline);
-    commandline = NULL;
     ch->hProcess = pi.hProcess;
 
     if (!RegisterWaitForSingleObject(&ch->waitHandle, ch->hProcess, ProcessReaper, ch, INFINITE, WT_EXECUTEONLYONCE))
@@ -370,8 +374,8 @@ errout:
     if (outputReadSide != INVALID_HANDLE_VALUE)
         CloseHandle(outputReadSide);
 
-    LocalFree(commandline);
-    LocalFree(command);
+    if (commandline != NULL)
+        free(commandline);
 
     return (NULL);
 }
@@ -461,115 +465,49 @@ LogError(LPCWSTR fun, LRESULT lr)
     }
 }
 
-LPWSTR
+std::wstring
 makeCommand(HKEY subkey)
 {
-#if 1
-    LPWSTR val = NULL;
-    std::wstringstream ss;
-
-    ss << TEXT("C:\\Users\\jason\\source\\repos\\FishnetSaver\\x64\\Release\\FishWrapper.exe");
-    val = _wcsdup(ss.str().c_str());
-    return val;
-#else
-    DWORD keylen;
-    LPWSTR val = NULL;
-    std::wstringstream ss;
-
-    keylen = 0;
-    if (RegGetValueW(subkey, NULL, L"Program", RRF_RT_REG_SZ, NULL, NULL, &keylen) != ERROR_SUCCESS) {
-        // XXX error handling
-        return NULL;
+    try {
+        return RegGetString(HKEY_LOCAL_MACHINE, REGISTRY_LOCATION, TEXT("Wrapper"));
     }
-
-    val = (LPWSTR)LocalAlloc(LMEM_FIXED, keylen);
-    if (val == NULL) {
-        // XXX error handling
-        return NULL;
+    catch (RegistryError& re) {
+        LogError(L"GetRegistryWrapperString", re.ErrorCode());
+        std::rethrow_exception(std::current_exception());
     }
-
-    if (RegGetValue(subkey, NULL, L"Program", RRF_RT_REG_SZ, NULL, val, &keylen) != ERROR_SUCCESS) {
-        LocalFree(val);
-        // XXX error handling
-        return NULL;
-    }
-
-    return val;
-#endif
 }
 
 LPWSTR
 makeCommandLine(HKEY subkey)
 {
-#if 1
-    LPWSTR val = NULL;
-    std::wstringstream ss;
+    std::wstring r;
+    LPWSTR s = NULL;
 
-    ss << "\"";
-    ss << TEXT("C:\\Users\\jason\\source\\repos\\FishnetSaver\\x64\\Release\\FishWrapper.exe");
-    ss << "\"";
+    try {
+        r += TEXT("\"");
+        r += RegGetString(HKEY_LOCAL_MACHINE, REGISTRY_LOCATION, TEXT("Wrapper"));
+        r += TEXT("\"");
 
-    ss << " \"";
-    ss << TEXT("C:\\Users\\jason\\source\\repos\\FishnetSaver\\x64\\Release\\DummyFish.exe");
-    ss << "\"";
+        r += TEXT(" \"");
+        r += RegGetString(HKEY_LOCAL_MACHINE, REGISTRY_LOCATION, TEXT("Program"));
+        r += TEXT("\"");
 
-    ss << " --key \"" << TEXT("mykey") << '"';
-    ss << " --no-conf run";
+        r += TEXT(" --key \"");
+        r += RegGetString(HKEY_LOCAL_MACHINE, REGISTRY_LOCATION, TEXT("Key"));
+        r += TEXT("\"");
 
-    val = _wcsdup(ss.str().c_str());
-    return val;
-#else
-    DWORD keylen = 0;
-    LPWSTR val = NULL;
-    std::wstringstream ss;
+        r += TEXT(" --no-conf run");
 
-    if (RegGetValueW(subkey, NULL, L"Program", RRF_RT_REG_SZ, NULL, NULL, &keylen) != ERROR_SUCCESS) {
-        // XXX error handling
-        return NULL;
+        s = _wcsdup(r.c_str());
+        if (s == NULL)
+            throw RegistryError{ "Cannot read string from registry", E_OUTOFMEMORY };
+    }
+    catch (RegistryError& re) {
+        LogError(L"makeCommandLine", re.ErrorCode());
+        std::rethrow_exception(std::current_exception());
     }
 
-
-    val = (LPWSTR)LocalAlloc(LMEM_FIXED, keylen);
-    if (val == NULL) {
-        // XXX error handling
-        return NULL;
-    }
-
-    if (RegGetValue(subkey, NULL, L"Program", RRF_RT_REG_SZ, NULL, val, &keylen) != ERROR_SUCCESS) {
-        LocalFree(val);
-        // XXX error handling
-        return NULL;
-    }
-
-    ss << "\"" << val << "\" --key \"";
-    LocalFree(val);
-
-    keylen = 0;
-    if (RegGetValueW(subkey, NULL, L"Key", RRF_RT_REG_SZ, NULL, NULL, &keylen) != ERROR_SUCCESS) {
-        // XXX error handling
-        return NULL;
-    }
-
-    val = (LPWSTR)LocalAlloc(LMEM_FIXED, keylen);
-    if (val == NULL) {
-        // XXX error handling
-        return NULL;
-    }
-
-    if (RegGetValue(subkey, NULL, L"Key", RRF_RT_REG_SZ, NULL, val, &keylen) != ERROR_SUCCESS) {
-        LocalFree(val);
-        // XXX error handling
-        return NULL;
-    }
-
-    ss << val << "\" --no-conf run";
-    LocalFree(val);
-
-    LPWSTR s = (LPWSTR)LocalAlloc(LMEM_FIXED, (ss.str().length() + 1) * sizeof(wchar_t));
-    if (s != NULL)
-        lstrcpyW(s, ss.str().c_str());
     return s;
-#endif
 }
 
 void
@@ -629,182 +567,3 @@ SetRegFromControl(HWND hCtrl, HKEY subkey, LPCWSTR regKey)
         // XXX error handling
     }
 }
-
-#if 0
-// XXX code for file dialog chooser from:
-// https://docs.microsoft.com/en-us/previous-versions/windows/desktop/legacy/bb776913(v=vs.85)
-
-class CDialogEventHandler : public IFileDialogEvents,
-    public IFileDialogControlEvents
-{
-public:
-    // IUnknown methods
-    IFACEMETHODIMP QueryInterface(REFIID riid, void** ppv)
-    {
-        static const QITAB qit[] = {
-            QITABENT(CDialogEventHandler, IFileDialogEvents),
-            QITABENT(CDialogEventHandler, IFileDialogControlEvents),
-            { 0 },
-        };
-        return QISearch(this, qit, riid, ppv);
-    }
-
-    IFACEMETHODIMP_(ULONG) AddRef()
-    {
-        return InterlockedIncrement(&_cRef);
-    }
-
-    IFACEMETHODIMP_(ULONG) Release()
-    {
-        long cRef = InterlockedDecrement(&_cRef);
-        if (!cRef)
-            delete this;
-        return cRef;
-    }
-
-    // IFileDialogEvents methods
-    IFACEMETHODIMP OnFileOk(IFileDialog*) { return S_OK; };
-    IFACEMETHODIMP OnFolderChange(IFileDialog*) { return S_OK; };
-    IFACEMETHODIMP OnFolderChanging(IFileDialog*, IShellItem*) { return S_OK; };
-    IFACEMETHODIMP OnHelp(IFileDialog*) { return S_OK; };
-    IFACEMETHODIMP OnSelectionChange(IFileDialog*) { return S_OK; };
-    IFACEMETHODIMP OnShareViolation(IFileDialog*, IShellItem*, FDE_SHAREVIOLATION_RESPONSE*) { return S_OK; };
-    IFACEMETHODIMP OnTypeChange(IFileDialog* pfd);
-    IFACEMETHODIMP OnOverwrite(IFileDialog*, IShellItem*, FDE_OVERWRITE_RESPONSE*) { return S_OK; };
-
-    // IFileDialogControlEvents methods
-    IFACEMETHODIMP OnItemSelected(IFileDialogCustomize* pfdc, DWORD dwIDCtl, DWORD dwIDItem);
-    IFACEMETHODIMP OnButtonClicked(IFileDialogCustomize*, DWORD) { return S_OK; };
-    IFACEMETHODIMP OnCheckButtonToggled(IFileDialogCustomize*, DWORD, BOOL) { return S_OK; };
-    IFACEMETHODIMP OnControlActivating(IFileDialogCustomize*, DWORD) { return S_OK; };
-
-    CDialogEventHandler() : _cRef(1) { };
-private:
-    ~CDialogEventHandler() { };
-    long _cRef;
-};
-
-HRESULT CDialogEventHandler_CreateInstance(REFIID riid, void** ppv)
-{
-    *ppv = NULL;
-    CDialogEventHandler* pDialogEventHandler = new (std::nothrow) CDialogEventHandler();
-    HRESULT hr = pDialogEventHandler ? S_OK : E_OUTOFMEMORY;
-    if (SUCCEEDED(hr))
-    {
-        hr = pDialogEventHandler->QueryInterface(riid, ppv);
-        pDialogEventHandler->Release();
-    }
-    return hr;
-}
-
-HRESULT CDialogEventHandler::OnItemSelected(IFileDialogCustomize* pfdc, DWORD dwIDCtl, DWORD dwIDItem)
-{
-    IFileDialog* pfd = NULL;
-    HRESULT hr = pfdc->QueryInterface(&pfd);
-    if (SUCCEEDED(hr))
-        pfd->Release();
-    return hr;
-}
-
-HRESULT CDialogEventHandler::OnTypeChange(IFileDialog* pfd)
-{
-    IFileSaveDialog* pfsd;
-    HRESULT hr = pfd->QueryInterface(&pfsd);
-    if (SUCCEEDED(hr))
-        pfsd->Release();
-    return hr;
-}
-
-HRESULT BasicFileOpen()
-{
-    const COMDLG_FILTERSPEC c_rgSaveTypes[] = { {L"Executable Programs (*.exe)", L"*.exe"} };
-#define INDEX_EXES 1
-    // CoCreate the File Open Dialog object.
-    IFileDialog* pfd = NULL;
-    HRESULT hr = CoCreateInstance(CLSID_FileOpenDialog,
-        NULL,
-        CLSCTX_INPROC_SERVER,
-        IID_PPV_ARGS(&pfd));
-    if (SUCCEEDED(hr))
-    {
-        // Create an event handling object, and hook it up to the dialog.
-        IFileDialogEvents* pfde = NULL;
-        hr = CDialogEventHandler_CreateInstance(IID_PPV_ARGS(&pfde));
-        if (SUCCEEDED(hr))
-        {
-            // Hook up the event handler.
-            DWORD dwCookie;
-            hr = pfd->Advise(pfde, &dwCookie);
-            if (SUCCEEDED(hr))
-            {
-                // Set the options on the dialog.
-                DWORD dwFlags;
-
-                // Before setting, always get the options first in order 
-                // not to override existing options.
-                hr = pfd->GetOptions(&dwFlags);
-                if (SUCCEEDED(hr))
-                {
-                    // In this case, get shell items only for file system items.
-                    hr = pfd->SetOptions(dwFlags | FOS_FORCEFILESYSTEM);
-                    if (SUCCEEDED(hr))
-                    {
-                        // Set the file types to display only. 
-                        // Notice that this is a 1-based array.
-                        hr = pfd->SetFileTypes(ARRAYSIZE(c_rgSaveTypes), c_rgSaveTypes);
-                        if (SUCCEEDED(hr))
-                        {
-                            // Set the selected file type index to Word Docs for this example.
-                            hr = pfd->SetFileTypeIndex(INDEX_EXES);
-                            if (SUCCEEDED(hr))
-                            {
-                                // Set the default extension to be ".doc" file.
-                                hr = pfd->SetDefaultExtension(L"exe");
-                                if (SUCCEEDED(hr))
-                                {
-                                    // Show the dialog
-                                    hr = pfd->Show(NULL);
-                                    if (SUCCEEDED(hr))
-                                    {
-                                        // Obtain the result once the user clicks 
-                                        // the 'Open' button.
-                                        // The result is an IShellItem object.
-                                        IShellItem* psiResult;
-                                        hr = pfd->GetResult(&psiResult);
-                                        if (SUCCEEDED(hr))
-                                        {
-                                            // We are just going to print out the 
-                                            // name of the file for sample sake.
-                                            PWSTR pszFilePath = NULL;
-                                            hr = psiResult->GetDisplayName(SIGDN_FILESYSPATH,
-                                                &pszFilePath);
-                                            if (SUCCEEDED(hr))
-                                            {
-                                                TaskDialog(NULL,
-                                                    NULL,
-                                                    L"CommonFileDialogApp",
-                                                    pszFilePath,
-                                                    NULL,
-                                                    TDCBF_OK_BUTTON,
-                                                    TD_INFORMATION_ICON,
-                                                    NULL);
-                                                CoTaskMemFree(pszFilePath);
-                                            }
-                                            psiResult->Release();
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                // Unhook the event handler.
-                pfd->Unadvise(dwCookie);
-            }
-            pfde->Release();
-        }
-        pfd->Release();
-    }
-    return hr;
-}
-#endif
