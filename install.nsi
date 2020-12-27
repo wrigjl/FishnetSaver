@@ -77,6 +77,7 @@ section
 
 	WriteRegStr HKLM $FishnetKey "Key" $thekey
 	WriteRegStr HKLM $FishnetKey "Program" "$INSTDIR\DummyFish.exe"
+	WriteRegStr HKLM $FishnetKey "Wrapper" "$INSTDIR\FishWrapper.exe"
 
 	# Set the logon screensaver
 	WriteRegStr HKU ".DEFAULT\Control Panel\Desktop" "SCRNSAVE.EXE" "$SYSDIR\FishnetSaver.scr"
@@ -87,6 +88,13 @@ section
 	WriteRegStr HKCU "Control Panel\Desktop" "SCRNSAVE.EXE" "$SYSDIR\FishnetSaver.scr"
 	WriteRegStr HKCU "Control Panel\Desktop" "ScreenSaveTimeOut" "900"
 	WriteRegStr HKCU "Control Panel\Desktop" "ScreenSaveActive" "1"
+
+	WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\FishnetSaver" "DisplayName" "FishnetSaver"
+	WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\FishnetSaver" "UninstallString" '"$INSTDIR\uninstaller.exe"'
+	WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\FishnetSaver" "InstallLocation" "$INSTDIR"
+	WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\FishnetSaver" "URLInfoAbout" "https://github.com/wrigjl/FishnetSaver"
+	WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\FishnetSaver" "NoModify" 1
+	WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\FishnetSaver" "NoRepair" 1
 
 	writeUninstaller $INSTDIR\uninstaller.exe
 sectionend
@@ -110,4 +118,7 @@ section "Uninstall"
 	DeleteRegKey HKLM $FishnetKey
 
 	delete $SYSDIR\FishnetSaver.scr
+
+	# XXX what should we do about HCU\.DEFAULT and HKCU screensavers?
+
 sectionend
