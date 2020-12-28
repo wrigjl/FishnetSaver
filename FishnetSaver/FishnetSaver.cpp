@@ -28,10 +28,6 @@ std::wstring makeCommand(HKEY subkey);
 void SetControlFromReg(HWND hCtrl, HKEY subkey, LPCWSTR regKey, HWND xx);
 void SetRegFromControl(HWND hCtrl, HKEY subkey, LPCWSTR regKey);
 
-#if 0
-HRESULT BasicFileOpen(void);
-#endif
-
 struct child_handles {
     HANDLE hProcess;
     HANDLE waitHandle;
@@ -83,11 +79,11 @@ LRESULT WINAPI ScreenSaverProc(HWND hWnd,
 
     if (message == WM_NCDESTROY) {
         // This is the last message we receive
-        ExitProcess(0);
+        //ExitProcess(0);
     }
 
     if (message == WM_DESTROY) {
-        PostMessage(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, -1);
+        //PostMessage(hWnd, WM_SYSCOMMAND, SC_MONITORPOWER, -1);
         StopIt(runningProc);
         RegCloseKey(hSubkey);
 
@@ -109,10 +105,12 @@ LRESULT WINAPI ScreenSaverProc(HWND hWnd,
         InvalidateRect(hWnd, &wrec, TRUE);
         timerticks++;
 
+#if 0
         if (timerticks == 3)
-            PostMessage(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, 1);
+            PostMessage(hWnd, WM_SYSCOMMAND, SC_MONITORPOWER, 1);
         else if (timerticks == 6)
-            PostMessage(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, 2);
+            PostMessage(hWnd, WM_SYSCOMMAND, SC_MONITORPOWER, 2);
+#endif
 
         return 0;
     }
@@ -398,6 +396,7 @@ StopIt(struct child_handles* ch) {
 void
 LogEvent(UINT message, WPARAM wParam, LPARAM lParam)
 {
+#ifdef EVENT_LOGGING
     LPWSTR s;
 
     if (hEventLog == NULL)
@@ -409,7 +408,6 @@ LogEvent(UINT message, WPARAM wParam, LPARAM lParam)
 
     ss << "message: 0x" << std::hex << message << " wParam: 0x" << wParam << " lParam: 0x" << lParam;
 
-
     pInsertStrings[0] = L"winevent";
     s = (LPWSTR)LocalAlloc(LMEM_FIXED, (ss.str().length()+1) * sizeof(wchar_t));
     if (s == NULL)
@@ -419,6 +417,7 @@ LogEvent(UINT message, WPARAM wParam, LPARAM lParam)
     pInsertStrings[1] = s;
     ReportEvent(hEventLog, EVENTLOG_INFORMATION_TYPE, GENERAL_CATEGORY, MSG_FUNCTION_ERROR, NULL, 2, 0, pInsertStrings, NULL);
     LocalFree(s);
+#endif
 }
 
 void
