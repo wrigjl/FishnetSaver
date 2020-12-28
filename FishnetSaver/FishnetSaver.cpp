@@ -79,11 +79,12 @@ LRESULT WINAPI ScreenSaverProc(HWND hWnd,
 
     if (message == WM_NCDESTROY) {
         // This is the last message we receive
+        PostMessage(hWnd, WM_SYSCOMMAND, SC_MONITORPOWER, -1);
         //ExitProcess(0);
     }
 
     if (message == WM_DESTROY) {
-        //PostMessage(hWnd, WM_SYSCOMMAND, SC_MONITORPOWER, -1);
+        PostMessage(hWnd, WM_SYSCOMMAND, SC_MONITORPOWER, -1);
         StopIt(runningProc);
         RegCloseKey(hSubkey);
 
@@ -108,7 +109,8 @@ LRESULT WINAPI ScreenSaverProc(HWND hWnd,
 #if 0
         if (timerticks == 3)
             PostMessage(hWnd, WM_SYSCOMMAND, SC_MONITORPOWER, 1);
-        else if (timerticks == 6)
+#else
+        if (timerticks == 6)
             PostMessage(hWnd, WM_SYSCOMMAND, SC_MONITORPOWER, 2);
 #endif
 
