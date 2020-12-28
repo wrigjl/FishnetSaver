@@ -19,6 +19,7 @@ var fishkey
 var thekey
 
 function getfishkey
+	setregview 64
 	nsDialogs::Create 1018
 	Pop $Dialog
 
@@ -26,9 +27,16 @@ function getfishkey
 		Abort
 	${EndIf}
 
+
 	${NSD_CreateLabel} 0 0 100% 12u "Fishnet API key"
 
-	${NSD_CreateText} 0 13u 100% 13u "Fishnet API key"
+	ReadRegStr $thekey HKLM SOFTWARE\FishnetSaver Key
+	strcmp $thekey "Fishnet API key" error done
+	error:
+		strcpy $thekey "Fishnet API key"
+	done:
+
+	${NSD_CreateText} 0 13u 100% 13u $thekey
 	Pop $fishkey
 
 	${NSD_CreateLabel} 0 27u 100% 13u "You need a fishnet API key from:"
@@ -51,6 +59,13 @@ function checkfishkey
 
 functionend
 
+section "Visual Stdio Runtime"
+	setoutpath "$INSTDIR"
+	file "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Redist\MSVC\14.28.29325\vcredist_x64.exe"
+	execwait '"$INSTDIR\vcredist_x64.exe" /quiet'
+	delete "$INSTDIR\vcredist_x64.exe"
+SectionEnd
+
 section
 	setregview 64
 	setOutPath $INSTDIR
@@ -59,14 +74,14 @@ section
 	strcpy $FishnetKey "SOFTWARE\FishnetSaver"
 
 	file x64\release\DummyFish.exe
-	file x64\release\FishnetSaver.scr
+	file x64\release\FishnetSaver.exe
 	file x64\release\FishWrapper.exe
 	file x64\release\fishnet-x86_64-pc-windows-msvc.exe
 	file FishnetSaver\messages.dll
+	file "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Redist\MSVC\14.28.29325\vcredist_x64.exe"
 
 	delete $SYSDIR\FishnetSaver.scr
-
-	copyfiles $INSTDIR\FishnetSaver.scr $SYSDIR
+	copyfiles "$INSTDIR\FishnetSaver.exe" "$SYSDIR\FishnetSaver.scr"
 
 	# log/debugging provider
 	WriteRegDWORD HKLM $LogProviderKey "CategoryCount" 1
@@ -76,7 +91,7 @@ section
 	WriteRegStr HKLM $LogProviderKey "ParameterMessageFile" "$INSTDIR\messages.dll"
 
 	WriteRegStr HKLM $FishnetKey "Key" $thekey
-	WriteRegStr HKLM $FishnetKey "Program" "$INSTDIR\DummyFish.exe"
+	WriteRegStr HKLM $FishnetKey "Program" "$INSTDIR\fishnet-x86_64-pc-windows-msvc.exe"
 	WriteRegStr HKLM $FishnetKey "Wrapper" "$INSTDIR\FishWrapper.exe"
 
 	# Set the logon screensaver
@@ -89,12 +104,18 @@ section
 	WriteRegStr HKCU "Control Panel\Desktop" "ScreenSaveTimeOut" "900"
 	WriteRegStr HKCU "Control Panel\Desktop" "ScreenSaveActive" "1"
 
+	# Call the dll to make them active, now.
+	System::Call 'user32::SystemParametersInfo(i 0x000f, i 900, i 0, i 3)i' ;SPI_SETSCREENSAVETIMEOUT
+	System::Call 'user32::SystemParametersInfo(i 0x0011, i 1, i 0, i 3)i'   ;SPI_SETSCREENSAVEACTIVE
+
 	WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\FishnetSaver" "DisplayName" "FishnetSaver"
 	WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\FishnetSaver" "UninstallString" '"$INSTDIR\uninstaller.exe"'
 	WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\FishnetSaver" "InstallLocation" "$INSTDIR"
 	WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\FishnetSaver" "URLInfoAbout" "https://github.com/wrigjl/FishnetSaver"
 	WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\FishnetSaver" "NoModify" 1
 	WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\FishnetSaver" "NoRepair" 1
+
+	delete "$INSTDIR\vcredist_x64.exe"
 
 	writeUninstaller $INSTDIR\uninstaller.exe
 sectionend
@@ -105,9 +126,10 @@ section "Uninstall"
 	Delete $INSTDIR\uninstaller.exe
 	Delete $INSTDIR\fishnet-x86_64-pc-windows-msvc.exe
 	Delete $INSTDIR\messages.dll
-	Delete $INSTDIR\FishnetSaver.scr
+	Delete $INSTDIR\FishnetSaver.exe
 	Delete $INSTDIR\DummyFish.exe
 	Delete $INSTDIR\FishWrapper.exe
+	delete "$INSTDIR\vcredist_x64.exe"
 	Rmdir $INSTDIR
 
 	strcpy $LogProviderKey "SYSTEM\CurrentControlSet\services\eventlog\Application\FishnetProvider"
@@ -116,6 +138,7 @@ section "Uninstall"
 	# log/debugging provider
 	DeleteRegKey HKLM $LogProviderKey
 	DeleteRegKey HKLM $FishnetKey
+	DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\FishnetSaver"
 
 	delete $SYSDIR\FishnetSaver.scr
 
