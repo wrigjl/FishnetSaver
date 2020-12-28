@@ -176,11 +176,9 @@ wmain(int argc, wchar_t* argv[], wchar_t* envp[])
     outputWriteSide = INVALID_HANDLE_VALUE;
 
     for (bool done = false; !done;) {
-        HANDLE handles[3];
+        HANDLE handles[3] = { pi.hProcess, hStdin, INVALID_HANDLE_VALUE };
         DWORD wait, nHandles = 2;
 
-        handles[0] = pi.hProcess;
-        handles[1] = hStdin;
         if (outputReadSide != INVALID_HANDLE_VALUE) {
             handles[2] = outputReadSide;
             nHandles++;
@@ -342,7 +340,7 @@ errout:
 bool
 GetSomeStdin(HANDLE hStdin, DWORD pid, HANDLE hProcess)
 {
-    TCHAR buf[80];
+    TCHAR buf[80] = { 0 };
     BOOL bResult;
     DWORD dwBytesRead = 0;
 
@@ -419,7 +417,7 @@ DiscardPipe(PHANDLE phPipe, HANDLE hOut)
 {
     BOOL bStatus;
     DWORD nRead = 0, nWrite = 0;
-    BYTE buf[100];
+    BYTE buf[100] = { 0 };
 
     bStatus = ReadFile(*phPipe, buf, sizeof(buf), &nRead, NULL);
     if (bStatus && nRead == 0) {
