@@ -55,16 +55,13 @@ LRESULT WINAPI ScreenSaverProc(HWND hWnd,
     static UINT_PTR uTimer;
     static bool quitOnExit = false;
     static HKEY hSubkey = (HKEY)INVALID_HANDLE_VALUE;
+    static int timerticks = 0;
 
     if (hEventLog == NULL)
         RegisterEventSource(NULL, PROVIDER_NAME);
-    //LogEvent(message, wParam, lParam);
+    LogEvent(message, wParam, lParam);
 
-    switch (message)
-    {
-
-    case WM_CREATE:
-    {
+    if (message == WM_CREATE) {
         if (hEventLog == NULL)
             RegisterEventSource(NULL, PROVIDER_NAME);
 
@@ -80,49 +77,57 @@ LRESULT WINAPI ScreenSaverProc(HWND hWnd,
             hEventLog = RegisterEventSource(NULL, PROVIDER_NAME);
 
         uTimer = SetTimer(hWnd, 1, 10000, NULL);
-        break;
+        timerticks = 0;
+        return 0;
     }
-    case WM_DESTROY:
+
+    if (message == WM_NCDESTROY) {
+        // This is the last message we receive
+        ExitProcess(0);
+    }
+
+    if (message == WM_DESTROY) {
+        PostMessage(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, -1);
+        StopIt(runningProc);
         RegCloseKey(hSubkey);
 
         if (uTimer)
             KillTimer(hWnd, 1);
 
-        if (runningProc == NULL)
-            PostQuitMessage(0);
-        else {
-            quitOnExit = true;
-            StopIt(runningProc);
-        }
-        break;
+        PostQuitMessage(0);
+        return 0;
+    }
 
-    case WM_TIMER:
-        if (quitOnExit)
-            break;
+    if (message == WM_TIMER) {
+        // Timer event fires every 10s
 
         if (runningProc == NULL)
             runningProc = StartIt(hSubkey);
 
-        {
-            RECT wrec = { 0 };
-            GetWindowRect(hWnd, &wrec);
-            InvalidateRect(hWnd, &wrec, TRUE);
-        }
-        break;
+        RECT wrec = { 0 };
+        GetWindowRect(hWnd, &wrec);
+        InvalidateRect(hWnd, &wrec, TRUE);
+        timerticks++;
 
-    case WM_ERASEBKGND:
-    {
+        if (timerticks == 3)
+            PostMessage(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, 1);
+        else if (timerticks == 6)
+            PostMessage(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, 2);
+
+        return 0;
+    }
+
+    if (message == WM_ERASEBKGND) {
         // I see a colorful screen and I want to paint it black
         HDC hDC = GetDC(hWnd);
         RECT rc = { 0 };
         GetClientRect(hWnd, &rc);
         FillRect(hDC, &rc, (HBRUSH)GetStockObject(BLACK_BRUSH));
         ReleaseDC(hWnd, hDC);
-        break;
+        return 0;
     }
 
-    case WM_PAINT:
-    {
+    if (message == WM_PAINT) {
         HDC hDC;
         RECT rc = { 0 };
         PAINTSTRUCT ps = { 0 };
@@ -147,40 +152,21 @@ LRESULT WINAPI ScreenSaverProc(HWND hWnd,
                 GetSystemMetrics(SM_CYSCREEN) / 2, TEXT("FishnetSaver"), (int)wcslen(L"FishnetSaver"));
 
         EndPaint(hWnd, &ps);
-        break;
+        return 0;
     }
-    case WM_PROCESS_EXITED:
-    {
+
+    if (message == WM_PROCESS_EXITED) {
         struct child_handles* ch = reinterpret_cast<struct child_handles*>(lParam);
-        CloseHandle(ch->hProcess);
-        (void) UnregisterWait(ch->waitHandle);
-        if (ch->hStdin != INVALID_HANDLE_VALUE) {
-            CloseHandle(ch->hStdin);
-            ch->hStdin = INVALID_HANDLE_VALUE;
-        }
-        if (ch->hStdout != INVALID_HANDLE_VALUE) {
-            CloseHandle(ch->hStdout);
-            ch->hStdout = INVALID_HANDLE_VALUE;
-        }
         if (runningProc == ch)
             runningProc = NULL;
-        LocalFree(ch);
-        if (quitOnExit)
-            PostQuitMessage(0);
-        {
-            RECT wrec = { 0 };
-            GetWindowRect(hWnd, &wrec);
-            InvalidateRect(hWnd, &wrec, TRUE);
-        }
-
-        break;
+        StopIt(ch);
+        RECT wrec = { 0 };
+        GetWindowRect(hWnd, &wrec);
+        InvalidateRect(hWnd, &wrec, TRUE);
+        return 0;
     }
 
-    default:
-        return DefScreenSaverProc(hWnd, message, wParam, lParam);
-    }
-
-    return 0;
+    return DefScreenSaverProc(hWnd, message, wParam, lParam);
 }
 
 BOOL WINAPI ScreenSaverConfigureDialog(HWND hDlg,
@@ -259,7 +245,7 @@ struct child_handles *
     HANDLE inputReadSide = INVALID_HANDLE_VALUE;
     HANDLE outputWriteSide = INVALID_HANDLE_VALUE;
     HANDLE outputReadSide = INVALID_HANDLE_VALUE;
-    SECURITY_ATTRIBUTES saAttr;
+    SECURITY_ATTRIBUTES saAttr = { 0 };
 
     OutputDebugStringW(L"Starting Process\n");
 
@@ -394,11 +380,19 @@ ProcessReaper(
 
 void
 StopIt(struct child_handles* ch) {
-    // All we really need to do is close the client handles
-    CloseHandle(ch->hStdin);
-    ch->hStdin = INVALID_HANDLE_VALUE;
-    CloseHandle(ch->hStdout);
-    ch->hStdout = INVALID_HANDLE_VALUE;
+    if (ch == NULL)
+        return;
+
+    CloseHandle(ch->hProcess);
+    (void)UnregisterWaitEx(ch->waitHandle, INVALID_HANDLE_VALUE);
+
+    if (ch->hStdin != INVALID_HANDLE_VALUE)
+        CloseHandle(ch->hStdin);
+
+    if (ch->hStdout != INVALID_HANDLE_VALUE)
+        CloseHandle(ch->hStdout);
+
+    LocalFree(ch);
 }
 
 void
@@ -413,7 +407,7 @@ LogEvent(UINT message, WPARAM wParam, LPARAM lParam)
 
     std::wstringstream ss;
 
-    ss << "message: " << message << " wParam: " << wParam << " lParam: " << lParam;
+    ss << "message: 0x" << std::hex << message << " wParam: 0x" << wParam << " lParam: 0x" << lParam;
 
 
     pInsertStrings[0] = L"winevent";
