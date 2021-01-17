@@ -76,7 +76,7 @@ section
 	file x64\release\DummyFish.exe
 	file x64\release\FishnetSaver.exe
 	file x64\release\FishWrapper.exe
-	file x64\release\fishnet-x86_64-pc-windows-msvc.exe
+	file x64\release\fishnet-x86_64-pc-windows-gnu.exe
 	file FishnetSaver\messages.dll
 	file "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Redist\MSVC\14.28.29325\vcredist_x64.exe"
 
@@ -91,7 +91,7 @@ section
 	WriteRegStr HKLM $LogProviderKey "ParameterMessageFile" "$INSTDIR\messages.dll"
 
 	WriteRegStr HKLM $FishnetKey "Key" $thekey
-	WriteRegStr HKLM $FishnetKey "Program" "$INSTDIR\fishnet-x86_64-pc-windows-msvc.exe"
+	WriteRegStr HKLM $FishnetKey "Program" "$INSTDIR\fishnet-x86_64-pc-windows-gnu.exe"
 	WriteRegStr HKLM $FishnetKey "Wrapper" "$INSTDIR\FishWrapper.exe"
 
 	# Set the logon screensaver
@@ -124,7 +124,7 @@ section "Uninstall"
 	setregview 64
 
 	Delete $INSTDIR\uninstaller.exe
-	Delete $INSTDIR\fishnet-x86_64-pc-windows-msvc.exe
+	Delete $INSTDIR\fishnet-x86_64-pc-windows-gnu.exe
 	Delete $INSTDIR\messages.dll
 	Delete $INSTDIR\FishnetSaver.exe
 	Delete $INSTDIR\DummyFish.exe
